@@ -6,7 +6,7 @@ const dotenv = require("dotenv");
 dotenv.config();
 
 const app = express();
-const PORT = 8001;
+const PORT = process.env.PORT || 8001;
 
 app.use(cors());
 app.use(express.json());
@@ -605,7 +605,7 @@ async function startServer() {
     console.log("MongoDB connected successfully.");
     console.log("Database: productivity_db");
 
-    app.listen(PORT, "127.0.0.1", () => {
+    app.listen(PORT, "0.0.0.0", () => {
       console.log(
         `Node.js server running at http://127.0.0.1:${PORT}`
       );
