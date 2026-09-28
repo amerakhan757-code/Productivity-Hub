@@ -1,22 +1,75 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  // Node.js backend deployed on Railway
   static const String baseUrl =
-    'https://productivity-hub-production-22ee.up.railway.app';
+      'https://productivity-hub-production-22ee.up.railway.app';
+
+  static String? _token;
+
+  // ============================================================
+  // TOKEN MANAGEMENT
+  // ============================================================
+
+  static Future<void> loadToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    _token = prefs.getString('auth_token');
+  }
+
+  static Future<void> saveToken(String token) async {
+    _token = token;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('auth_token', token);
+  }
+
+  static Future<void> clearToken() async {
+    _token = null;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('auth_token');
+  }
+
+  static bool get isLoggedIn => _token != null;
+
+  // ============================================================
+  // HEADERS
+  // ============================================================
+
+  static Map<String, String> _headers({bool json = false}) {
+    final headers = <String, String>{
+      'Accept': 'application/json',
+    };
+
+    if (json) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    if (_token != null) {
+      headers['Authorization'] = 'Bearer $_token';
+    }
+
+    return headers;
+  }
+
+  // ============================================================
+  // GET
+  // ============================================================
 
   static Future<dynamic> get(String endpoint) async {
     final response = await http.get(
       Uri.parse('$baseUrl$endpoint'),
-      headers: {
-        'Accept': 'application/json',
-      },
+      headers: _headers(),
     );
 
     return _handleResponse(response);
   }
+
+  // ============================================================
+  // POST
+  // ============================================================
 
   static Future<dynamic> post(
     String endpoint,
@@ -24,15 +77,16 @@ class ApiService {
   ) async {
     final response = await http.post(
       Uri.parse('$baseUrl$endpoint'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
+      headers: _headers(json: true),
       body: jsonEncode(data),
     );
 
     return _handleResponse(response);
   }
+
+  // ============================================================
+  // PUT
+  // ============================================================
 
   static Future<dynamic> put(
     String endpoint,
@@ -40,37 +94,42 @@ class ApiService {
   ) async {
     final response = await http.put(
       Uri.parse('$baseUrl$endpoint'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
+      headers: _headers(json: true),
       body: jsonEncode(data),
     );
 
     return _handleResponse(response);
   }
 
+  // ============================================================
+  // PATCH
+  // ============================================================
+
   static Future<dynamic> patch(String endpoint) async {
     final response = await http.patch(
       Uri.parse('$baseUrl$endpoint'),
-      headers: {
-        'Accept': 'application/json',
-      },
+      headers: _headers(),
     );
 
     return _handleResponse(response);
   }
+
+  // ============================================================
+  // DELETE
+  // ============================================================
 
   static Future<dynamic> delete(String endpoint) async {
     final response = await http.delete(
       Uri.parse('$baseUrl$endpoint'),
-      headers: {
-        'Accept': 'application/json',
-      },
+      headers: _headers(),
     );
 
     return _handleResponse(response);
   }
+
+  // ============================================================
+  // RESPONSE HANDLER
+  // ============================================================
 
   static dynamic _handleResponse(http.Response response) {
     dynamic data;
@@ -91,14 +150,94 @@ class ApiService {
       message = data['detail'].toString();
     }
 
+    if (data is Map && data['message'] != null) {
+      message = data['message'].toString();
+    }
+
     throw Exception(
       '$message (Status: ${response.statusCode})',
     );
   }
 
-  // -------------------------
+  // ============================================================
+  // REGISTER
+  // ============================================================
+
+  static Future<Map<String, dynamic>> register({
+    required String username,
+    required String password,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/register'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: jsonEncode({
+        'username': username,
+        'password': password,
+      }),
+    );
+
+    final data = _handleResponse(response);
+
+    if (data is Map && data['token'] != null) {
+      await saveToken(data['token'].toString());
+    }
+
+    return Map<String, dynamic>.from(data);
+  }
+
+  // ============================================================
+  // LOGIN
+  // ============================================================
+
+  static Future<Map<String, dynamic>> login({
+    required String username,
+    required String password,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/login'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: jsonEncode({
+        'username': username,
+        'password': password,
+      }),
+    );
+
+    final data = _handleResponse(response);
+
+    if (data is Map && data['token'] != null) {
+      await saveToken(data['token'].toString());
+    }
+
+    return Map<String, dynamic>.from(data);
+  }
+
+  // ============================================================
+  // CURRENT USER
+  // ============================================================
+
+  static Future<Map<String, dynamic>> getCurrentUser() async {
+    final data = await get('/auth/me');
+
+    return Map<String, dynamic>.from(data);
+  }
+
+  // ============================================================
+  // LOGOUT
+  // ============================================================
+
+  static Future<void> logout() async {
+    await clearToken();
+  }
+
+  // ============================================================
   // CONNECTION TEST
-  // -------------------------
+  // ============================================================
 
   static Future<bool> testConnection() async {
     try {
@@ -111,9 +250,9 @@ class ApiService {
     }
   }
 
-  // -------------------------
+  // ============================================================
   // GOALS
-  // -------------------------
+  // ============================================================
 
   static Future<List<dynamic>> getGoals() async {
     final data = await get('/goals');
@@ -126,14 +265,11 @@ class ApiService {
     required String description,
     required DateTime deadline,
   }) {
-    return post(
-      '/goals',
-      {
-        'title': title,
-        'description': description,
-        'deadline': _formatDate(deadline),
-      },
-    );
+    return post('/goals', {
+      'title': title,
+      'description': description,
+      'deadline': _formatDate(deadline),
+    });
   }
 
   static Future<dynamic> updateGoal({
@@ -142,23 +278,20 @@ class ApiService {
     required String description,
     required DateTime deadline,
   }) {
-    return put(
-      '/goals/$id',
-      {
-        'title': title,
-        'description': description,
-        'deadline': _formatDate(deadline),
-      },
-    );
+    return put('/goals/$id', {
+      'title': title,
+      'description': description,
+      'deadline': _formatDate(deadline),
+    });
   }
 
   static Future<dynamic> deleteGoal(String id) {
     return delete('/goals/$id');
   }
 
-  // -------------------------
+  // ============================================================
   // TASKS
-  // -------------------------
+  // ============================================================
 
   static Future<List<dynamic>> getTasks() async {
     final data = await get('/tasks');
@@ -172,15 +305,12 @@ class ApiService {
     required DateTime deadline,
     required String priority,
   }) {
-    return post(
-      '/tasks',
-      {
-        'title': title,
-        'goal_id': goalId,
-        'deadline': _formatDate(deadline),
-        'priority': priority,
-      },
-    );
+    return post('/tasks', {
+      'title': title,
+      'goal_id': goalId,
+      'deadline': _formatDate(deadline),
+      'priority': priority,
+    });
   }
 
   static Future<dynamic> updateTask({
@@ -191,16 +321,13 @@ class ApiService {
     required String priority,
     required bool completed,
   }) {
-    return put(
-      '/tasks/$id',
-      {
-        'title': title,
-        'goal_id': goalId,
-        'deadline': _formatDate(deadline),
-        'priority': priority,
-        'completed': completed,
-      },
-    );
+    return put('/tasks/$id', {
+      'title': title,
+      'goal_id': goalId,
+      'deadline': _formatDate(deadline),
+      'priority': priority,
+      'completed': completed,
+    });
   }
 
   static Future<dynamic> toggleTask(String id) {
@@ -211,9 +338,9 @@ class ApiService {
     return delete('/tasks/$id');
   }
 
-  // -------------------------
+  // ============================================================
   // STATISTICS
-  // -------------------------
+  // ============================================================
 
   static Future<Map<String, dynamic>> getStats() async {
     final data = await get('/stats');
@@ -221,9 +348,9 @@ class ApiService {
     return Map<String, dynamic>.from(data);
   }
 
-  // -------------------------
+  // ============================================================
   // DATE FORMAT
-  // -------------------------
+  // ============================================================
 
   static String _formatDate(DateTime date) {
     return '${date.year.toString().padLeft(4, '0')}-'

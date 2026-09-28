@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'api_service.dart';
+import 'auth_page.dart';
 
 void main() {
   runApp(const ProductivityApp());
@@ -26,7 +27,102 @@ class ProductivityApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const MainDashboard(),
+      home: const AuthGate(),
+    );
+  }
+}
+
+// ============================================================
+// AUTH GATE
+// ============================================================
+
+class AuthGate extends StatefulWidget {
+  const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  bool loading = true;
+  bool authenticated = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAuthentication();
+  }
+
+  Future<void> _checkAuthentication() async {
+    try {
+      await ApiService.loadToken();
+
+      if (ApiService.isLoggedIn) {
+        await ApiService.getCurrentUser();
+
+        if (!mounted) return;
+
+        setState(() {
+          authenticated = true;
+          loading = false;
+        });
+      } else {
+        if (!mounted) return;
+
+        setState(() {
+          authenticated = false;
+          loading = false;
+        });
+      }
+    } catch (_) {
+      await ApiService.clearToken();
+
+      if (!mounted) return;
+
+      setState(() {
+        authenticated = false;
+        loading = false;
+      });
+    }
+  }
+
+  void _onAuthenticated() {
+    setState(() {
+      authenticated = true;
+    });
+  }
+
+  Future<void> _logout() async {
+    await ApiService.logout();
+
+    if (!mounted) return;
+
+    setState(() {
+      authenticated = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF090611),
+        body: Center(
+          child: CircularProgressIndicator(
+            color: Color(0xFF9B5CFF),
+          ),
+        ),
+      );
+    }
+
+    if (!authenticated) {
+      return AuthPage(
+        onAuthenticated: _onAuthenticated,
+      );
+    }
+
+    return MainDashboard(
+      onLogout: _logout,
     );
   }
 }
@@ -74,7 +170,12 @@ class Task {
 // ============================================================
 
 class MainDashboard extends StatefulWidget {
-  const MainDashboard({super.key});
+  final VoidCallback onLogout;
+
+  const MainDashboard({
+    super.key,
+    required this.onLogout,
+  });
 
   @override
   State<MainDashboard> createState() => _MainDashboardState();
@@ -83,18 +184,14 @@ class MainDashboard extends StatefulWidget {
 class _MainDashboardState extends State<MainDashboard> {
   int selectedIndex = 0;
 
-  // ----------------------------------------------------------
-  // DATA
-  // ----------------------------------------------------------
-
   final List<Goal> goals = [];
   final List<Task> tasks = [];
 
   bool isLoading = true;
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // INITIAL LOAD
-  // ----------------------------------------------------------
+  // ==========================================================
 
   @override
   void initState() {
@@ -182,9 +279,9 @@ class _MainDashboardState extends State<MainDashboard> {
     }
   }
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // PROGRESS
-  // ----------------------------------------------------------
+  // ==========================================================
 
   double goalProgress(Goal goal) {
     final goalTasks = tasks
@@ -231,9 +328,9 @@ class _MainDashboardState extends State<MainDashboard> {
     }).length;
   }
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // MOTIVATIONAL QUOTES
-  // ----------------------------------------------------------
+  // ==========================================================
 
   String get motivationalQuote {
     final progress = overallProgress;
@@ -243,7 +340,7 @@ class _MainDashboardState extends State<MainDashboard> {
     }
 
     if (progress >= 100) {
-      return "Keep on, with the force, don't stop 'til you get enough.";
+      return "Keep going. Don't stop until you get there.";
     }
 
     if (progress < 20) {
@@ -277,9 +374,9 @@ class _MainDashboardState extends State<MainDashboard> {
     return "TODAY'S MINDSET";
   }
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // PRODUCTIVITY
-  // ----------------------------------------------------------
+  // ==========================================================
 
   int get productivityScore {
     if (tasks.isEmpty) {
@@ -311,6 +408,7 @@ class _MainDashboardState extends State<MainDashboard> {
         onAddTask: _addTask,
         onToggleTask: _toggleTask,
         onDeleteTask: _deleteTask,
+        onLogout: widget.onLogout,
       ),
       GoalsPage(
         goals: goals,
@@ -390,7 +488,7 @@ class _MainDashboardState extends State<MainDashboard> {
   }
 
   // ==========================================================
-  // ERROR MESSAGE
+  // ERROR
   // ==========================================================
 
   void _showError(String message) {
@@ -462,7 +560,8 @@ class _MainDashboardState extends State<MainDashboard> {
                           builder: (context, child) {
                             return Theme(
                               data: ThemeData.dark().copyWith(
-                                colorScheme: const ColorScheme.dark(
+                                colorScheme:
+                                    const ColorScheme.dark(
                                   primary: Color(0xFF9B5CFF),
                                 ),
                               ),
@@ -497,7 +596,9 @@ class _MainDashboardState extends State<MainDashboard> {
                   onPressed: saving
                       ? null
                       : () async {
-                          if (titleController.text.trim().isEmpty) {
+                          if (titleController.text
+                              .trim()
+                              .isEmpty) {
                             _showError(
                               'Please enter a goal name.',
                             );
@@ -518,7 +619,8 @@ class _MainDashboardState extends State<MainDashboard> {
                           try {
                             final result =
                                 await ApiService.createGoal(
-                              title: titleController.text.trim(),
+                              title:
+                                  titleController.text.trim(),
                               description:
                                   descriptionController.text
                                           .trim()
@@ -537,14 +639,9 @@ class _MainDashboardState extends State<MainDashboard> {
                               title:
                                   data['title']?.toString() ??
                                       titleController.text.trim(),
-                              description: data['description']
-                                      ?.toString() ??
-                                  (descriptionController.text
-                                          .trim()
-                                          .isEmpty
-                                      ? 'No description added.'
-                                      : descriptionController.text
-                                          .trim()),
+                              description:
+                                  data['description']?.toString() ??
+                                      'No description added.',
                               deadline: DateTime.parse(
                                 data['deadline'].toString(),
                               ),
@@ -703,7 +800,8 @@ class _MainDashboardState extends State<MainDashboard> {
                           builder: (context, child) {
                             return Theme(
                               data: ThemeData.dark().copyWith(
-                                colorScheme: const ColorScheme.dark(
+                                colorScheme:
+                                    const ColorScheme.dark(
                                   primary: Color(0xFF9B5CFF),
                                 ),
                               ),
@@ -738,7 +836,9 @@ class _MainDashboardState extends State<MainDashboard> {
                   onPressed: saving
                       ? null
                       : () async {
-                          if (titleController.text.trim().isEmpty) {
+                          if (titleController.text
+                              .trim()
+                              .isEmpty) {
                             _showError(
                               'Please enter a task name.',
                             );
@@ -772,8 +872,10 @@ class _MainDashboardState extends State<MainDashboard> {
                           try {
                             final result =
                                 await ApiService.createTask(
-                              title: titleController.text.trim(),
-                              goalId: selectedGoalObject.id!,
+                              title:
+                                  titleController.text.trim(),
+                              goalId:
+                                  selectedGoalObject.id!,
                               deadline: selectedDate!,
                               priority: priority,
                             );
@@ -789,7 +891,8 @@ class _MainDashboardState extends State<MainDashboard> {
                               title:
                                   data['title']?.toString() ??
                                       titleController.text.trim(),
-                              goalTitle: selectedGoalObject.title,
+                              goalTitle:
+                                  selectedGoalObject.title,
                               deadline: DateTime.parse(
                                 data['deadline'].toString(),
                               ),
@@ -856,7 +959,8 @@ class _MainDashboardState extends State<MainDashboard> {
     }
 
     try {
-      final result = await ApiService.toggleTask(task.id!);
+      final result =
+          await ApiService.toggleTask(task.id!);
 
       final data = Map<String, dynamic>.from(result);
 
@@ -962,6 +1066,7 @@ class DashboardPage extends StatelessWidget {
   final VoidCallback onAddTask;
   final Function(int) onToggleTask;
   final Function(int) onDeleteTask;
+  final VoidCallback onLogout;
 
   const DashboardPage({
     super.key,
@@ -979,6 +1084,7 @@ class DashboardPage extends StatelessWidget {
     required this.onAddTask,
     required this.onToggleTask,
     required this.onDeleteTask,
+    required this.onLogout,
   });
 
   @override
@@ -992,7 +1098,8 @@ class DashboardPage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _header(),
+              _header(context),
+
               const SizedBox(height: 25),
 
               MotivationCard(
@@ -1008,7 +1115,8 @@ class DashboardPage extends StatelessWidget {
                 mainAxisSpacing: 14,
                 childAspectRatio: wide ? 1.55 : 1.3,
                 shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
+                physics:
+                    const NeverScrollableScrollPhysics(),
                 children: [
                   StatCard(
                     title: 'TOTAL GOALS',
@@ -1024,7 +1132,8 @@ class DashboardPage extends StatelessWidget {
                   ),
                   StatCard(
                     title: 'PROGRESS',
-                    value: '${overallProgress.round()}%',
+                    value:
+                        '${overallProgress.round()}%',
                     subtitle: 'Overall progress',
                     icon: Icons.trending_up_rounded,
                   ),
@@ -1084,7 +1193,12 @@ class DashboardPage extends StatelessWidget {
                       'Break your goals into small tasks.',
                 )
               else
-                ...tasks.take(4).toList().asMap().entries.map(
+                ...tasks
+                    .take(4)
+                    .toList()
+                    .asMap()
+                    .entries
+                    .map(
                   (entry) {
                     return TaskTile(
                       task: entry.value,
@@ -1121,7 +1235,7 @@ class DashboardPage extends StatelessWidget {
     );
   }
 
-  Widget _header() {
+  Widget _header(BuildContext context) {
     return Row(
       children: [
         Container(
@@ -1137,7 +1251,8 @@ class DashboardPage extends StatelessWidget {
             borderRadius: BorderRadius.circular(15),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF9B5CFF).withOpacity(.35),
+                color: const Color(0xFF9B5CFF)
+                    .withOpacity(.35),
                 blurRadius: 20,
               ),
             ],
@@ -1152,7 +1267,8 @@ class DashboardPage extends StatelessWidget {
 
         const Expanded(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
             children: [
               Text(
                 'PRODUCTIVITY HUB',
@@ -1171,6 +1287,48 @@ class DashboardPage extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+
+        IconButton(
+          tooltip: 'Logout',
+          onPressed: () {
+            showDialog(
+              context: context,
+              builder: (dialogContext) {
+                return AlertDialog(
+                  backgroundColor:
+                      const Color(0xFF171021),
+                  title: const Text('Logout'),
+                  content: const Text(
+                    'Are you sure you want to logout?',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(dialogContext);
+                      },
+                      child: const Text('Cancel'),
+                    ),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor:
+                            const Color(0xFF8D4FFF),
+                      ),
+                      onPressed: () {
+                        Navigator.pop(dialogContext);
+                        onLogout();
+                      },
+                      child: const Text('Logout'),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+          icon: const Icon(
+            Icons.logout_rounded,
+            color: Color(0xFFB878FF),
           ),
         ),
       ],
@@ -1208,11 +1366,13 @@ class MotivationCard extends StatelessWidget {
           ],
         ),
         border: Border.all(
-          color: const Color(0xFF9B5CFF).withOpacity(.35),
+          color: const Color(0xFF9B5CFF)
+              .withOpacity(.35),
         ),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF9B5CFF).withOpacity(.12),
+            color: const Color(0xFF9B5CFF)
+                .withOpacity(.12),
             blurRadius: 30,
           ),
         ],
@@ -1224,7 +1384,8 @@ class MotivationCard extends StatelessWidget {
             height: 55,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFF9B5CFF).withOpacity(.15),
+              color: const Color(0xFF9B5CFF)
+                  .withOpacity(.15),
             ),
             child: const Icon(
               Icons.format_quote_rounded,
@@ -1237,7 +1398,8 @@ class MotivationCard extends StatelessWidget {
 
           Expanded(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
               children: [
                 Text(
                   label,
@@ -1298,7 +1460,8 @@ class StatCard extends StatelessWidget {
         ),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
         children: [
           Row(
             children: [
@@ -1387,8 +1550,10 @@ class DashboardGoalCard extends StatelessWidget {
                 width: 43,
                 height: 43,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF9B5CFF).withOpacity(.12),
-                  borderRadius: BorderRadius.circular(12),
+                  color: const Color(0xFF9B5CFF)
+                      .withOpacity(.12),
+                  borderRadius:
+                      BorderRadius.circular(12),
                 ),
                 child: const Icon(
                   Icons.flag_rounded,
@@ -1400,7 +1565,8 @@ class DashboardGoalCard extends StatelessWidget {
 
               Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
                   children: [
                     Text(
                       goal.title,
@@ -1438,9 +1604,12 @@ class DashboardGoalCard extends StatelessWidget {
           LinearProgressIndicator(
             value: progress / 100,
             minHeight: 7,
-            borderRadius: BorderRadius.circular(10),
-            backgroundColor: const Color(0xFF292034),
-            valueColor: const AlwaysStoppedAnimation(
+            borderRadius:
+                BorderRadius.circular(10),
+            backgroundColor:
+                const Color(0xFF292034),
+            valueColor:
+                const AlwaysStoppedAnimation(
               Color(0xFF9B5CFF),
             ),
           ),
@@ -1563,7 +1732,8 @@ class TaskTile extends StatelessWidget {
 
           Expanded(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
               children: [
                 Text(
                   task.title,
@@ -1653,7 +1823,8 @@ class PriorityBadge extends StatelessWidget {
         vertical: 5,
       ),
       decoration: BoxDecoration(
-        color: const Color(0xFF9B5CFF).withOpacity(.1),
+        color: const Color(0xFF9B5CFF)
+            .withOpacity(.1),
         borderRadius: BorderRadius.circular(7),
       ),
       child: Text(
@@ -1709,7 +1880,8 @@ class WeeklyChart extends StatelessWidget {
         ),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
         children: [
           const Text(
             'WEEKLY PRODUCTIVITY',
@@ -1725,17 +1897,20 @@ class WeeklyChart extends StatelessWidget {
 
           Expanded(
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
+              crossAxisAlignment:
+                  CrossAxisAlignment.end,
               children: List.generate(
                 values.length,
                 (index) {
                   return Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(
+                      padding:
+                          const EdgeInsets.symmetric(
                         horizontal: 4,
                       ),
                       child: Column(
-                        mainAxisAlignment: MainAxisAlignment.end,
+                        mainAxisAlignment:
+                            MainAxisAlignment.end,
                         children: [
                           Text(
                             '${(values[index] * 100).round()}%',
@@ -1749,18 +1924,23 @@ class WeeklyChart extends StatelessWidget {
 
                           Expanded(
                             child: Align(
-                              alignment: Alignment.bottomCenter,
+                              alignment:
+                                  Alignment.bottomCenter,
                               child: FractionallySizedBox(
-                                heightFactor: values[index],
+                                heightFactor:
+                                    values[index],
                                 child: Container(
-                                  decoration: BoxDecoration(
+                                  decoration:
+                                      BoxDecoration(
                                     borderRadius:
-                                        BorderRadius.circular(8),
+                                        BorderRadius.circular(
+                                            8),
                                     gradient:
                                         const LinearGradient(
-                                      begin:
-                                          Alignment.bottomCenter,
-                                      end: Alignment.topCenter,
+                                      begin: Alignment
+                                          .bottomCenter,
+                                      end: Alignment
+                                          .topCenter,
                                       colors: [
                                         Color(0xFF6334C7),
                                         Color(0xFFC16AFF),
@@ -1821,11 +2001,13 @@ class GoalsPage extends StatelessWidget {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(22),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
         children: [
           PageHeader(
             title: 'MY GOALS',
-            subtitle: 'Choose what you want to achieve.',
+            subtitle:
+                'Choose what you want to achieve.',
             icon: Icons.flag_rounded,
             buttonText: 'New Goal',
             onPressed: onAddGoal,
@@ -1845,11 +2027,13 @@ class GoalsPage extends StatelessWidget {
               (entry) {
                 return GoalCard(
                   goal: entry.value,
-                  progress: goalProgress(entry.value),
+                  progress:
+                      goalProgress(entry.value),
                   taskCount: tasks
                       .where(
                         (task) =>
-                            task.goalId == entry.value.id,
+                            task.goalId ==
+                            entry.value.id,
                       )
                       .length,
                   onDelete: () {
@@ -1902,8 +2086,10 @@ class GoalCard extends StatelessWidget {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(14),
-                  color: const Color(0xFF9B5CFF).withOpacity(.12),
+                  borderRadius:
+                      BorderRadius.circular(14),
+                  color: const Color(0xFF9B5CFF)
+                      .withOpacity(.12),
                 ),
                 child: const Icon(
                   Icons.flag_rounded,
@@ -1915,7 +2101,8 @@ class GoalCard extends StatelessWidget {
 
               Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
                   children: [
                     Text(
                       goal.title,
@@ -1988,9 +2175,12 @@ class GoalCard extends StatelessWidget {
                 child: LinearProgressIndicator(
                   value: progress / 100,
                   minHeight: 8,
-                  borderRadius: BorderRadius.circular(10),
-                  backgroundColor: const Color(0xFF292034),
-                  valueColor: const AlwaysStoppedAnimation(
+                  borderRadius:
+                      BorderRadius.circular(10),
+                  backgroundColor:
+                      const Color(0xFF292034),
+                  valueColor:
+                      const AlwaysStoppedAnimation(
                     Color(0xFF9B5CFF),
                   ),
                 ),
@@ -2038,11 +2228,13 @@ class TasksPage extends StatelessWidget {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(22),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
         children: [
           PageHeader(
             title: 'MY TASKS',
-            subtitle: 'Turn your goals into daily actions.',
+            subtitle:
+                'Turn your goals into daily actions.',
             icon: Icons.check_circle_rounded,
             buttonText: 'New Task',
             onPressed: onAddTask,
@@ -2108,11 +2300,13 @@ class ProgressPage extends StatelessWidget {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(22),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
         children: [
           const PageHeader(
             title: 'PROGRESS',
-            subtitle: 'See how far you have come.',
+            subtitle:
+                'See how far you have come.',
             icon: Icons.bar_chart_rounded,
           ),
 
@@ -2121,7 +2315,8 @@ class ProgressPage extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(25),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(24),
+              borderRadius:
+                  BorderRadius.circular(24),
               gradient: const LinearGradient(
                 colors: [
                   Color(0xFF211035),
@@ -2129,7 +2324,8 @@ class ProgressPage extends StatelessWidget {
                 ],
               ),
               border: Border.all(
-                color: const Color(0xFF9B5CFF).withOpacity(.3),
+                color: const Color(0xFF9B5CFF)
+                    .withOpacity(.3),
               ),
             ),
             child: Column(
@@ -2155,8 +2351,10 @@ class ProgressPage extends StatelessWidget {
                       SizedBox(
                         width: 190,
                         height: 190,
-                        child: CircularProgressIndicator(
-                          value: overallProgress / 100,
+                        child:
+                            CircularProgressIndicator(
+                          value:
+                              overallProgress / 100,
                           strokeWidth: 15,
                           backgroundColor:
                               const Color(0xFF292034),
@@ -2188,7 +2386,8 @@ class ProgressPage extends StatelessWidget {
             crossAxisSpacing: 14,
             mainAxisSpacing: 14,
             shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
+            physics:
+                const NeverScrollableScrollPhysics(),
             childAspectRatio: isWide ? 2 : 3,
             children: [
               StatCard(
@@ -2200,7 +2399,8 @@ class ProgressPage extends StatelessWidget {
               StatCard(
                 title: 'TASKS DONE',
                 value: '$completed',
-                subtitle: '${tasks.length} total tasks',
+                subtitle:
+                    '${tasks.length} total tasks',
                 icon: Icons.check_circle_rounded,
               ),
               StatCard(
@@ -2218,13 +2418,15 @@ class ProgressPage extends StatelessWidget {
             padding: const EdgeInsets.all(22),
             decoration: BoxDecoration(
               color: const Color(0xFF120D1B),
-              borderRadius: BorderRadius.circular(22),
+              borderRadius:
+                  BorderRadius.circular(22),
               border: Border.all(
                 color: const Color(0xFF2A2134),
               ),
             ),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
               children: [
                 const Text(
                   'GOAL BREAKDOWN',
@@ -2248,10 +2450,12 @@ class ProgressPage extends StatelessWidget {
                 else
                   ...goals.map(
                     (goal) {
-                      final progress = goalProgress(goal);
+                      final progress =
+                          goalProgress(goal);
 
                       return Padding(
-                        padding: const EdgeInsets.only(
+                        padding:
+                            const EdgeInsets.only(
                           bottom: 18,
                         ),
                         child: Column(
@@ -2261,8 +2465,10 @@ class ProgressPage extends StatelessWidget {
                                 Expanded(
                                   child: Text(
                                     goal.title,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
+                                    style:
+                                        const TextStyle(
+                                      fontWeight:
+                                          FontWeight.w600,
                                       fontSize: 12,
                                     ),
                                   ),
@@ -2270,8 +2476,10 @@ class ProgressPage extends StatelessWidget {
 
                                 Text(
                                   '${progress.round()}%',
-                                  style: const TextStyle(
-                                    color: Color(0xFFC084FF),
+                                  style:
+                                      const TextStyle(
+                                    color:
+                                        Color(0xFFC084FF),
                                     fontSize: 11,
                                   ),
                                 ),
@@ -2284,7 +2492,8 @@ class ProgressPage extends StatelessWidget {
                               value: progress / 100,
                               minHeight: 7,
                               borderRadius:
-                                  BorderRadius.circular(10),
+                                  BorderRadius.circular(
+                                      10),
                               backgroundColor:
                                   const Color(0xFF292034),
                               valueColor:
@@ -2338,8 +2547,10 @@ class PageHeader extends StatelessWidget {
           width: 50,
           height: 50,
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(15),
-            color: const Color(0xFF9B5CFF).withOpacity(.12),
+            borderRadius:
+                BorderRadius.circular(15),
+            color: const Color(0xFF9B5CFF)
+                .withOpacity(.12),
           ),
           child: Icon(
             icon,
@@ -2351,7 +2562,8 @@ class PageHeader extends StatelessWidget {
 
         Expanded(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
             children: [
               Text(
                 title,
@@ -2384,14 +2596,18 @@ class PageHeader extends StatelessWidget {
             ),
             label: Text(buttonText!),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF8D4FFF),
+              backgroundColor:
+                  const Color(0xFF8D4FFF),
               foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(
+              padding:
+                  const EdgeInsets.symmetric(
                 horizontal: 15,
                 vertical: 12,
               ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+              shape:
+                  RoundedRectangleBorder(
+                borderRadius:
+                    BorderRadius.circular(12),
               ),
             ),
           ),
@@ -2423,7 +2639,8 @@ class EmptyState extends StatelessWidget {
       padding: const EdgeInsets.all(45),
       decoration: BoxDecoration(
         color: const Color(0xFF120D1B),
-        borderRadius: BorderRadius.circular(22),
+        borderRadius:
+            BorderRadius.circular(22),
         border: Border.all(
           color: const Color(0xFF2A2134),
         ),
@@ -2475,19 +2692,22 @@ InputDecoration inputDecoration(String label) {
     filled: true,
     fillColor: const Color(0xFF0D0914),
     border: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius:
+          BorderRadius.circular(12),
       borderSide: const BorderSide(
         color: Color(0xFF2A2134),
       ),
     ),
     enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius:
+          BorderRadius.circular(12),
       borderSide: const BorderSide(
         color: Color(0xFF2A2134),
       ),
     ),
     focusedBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius:
+          BorderRadius.circular(12),
       borderSide: const BorderSide(
         color: Color(0xFF9B5CFF),
       ),
