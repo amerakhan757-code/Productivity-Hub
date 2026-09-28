@@ -3,8 +3,9 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiService {
-  // Node.js backend
-  static const String baseUrl = 'http://127.0.0.1:8001';
+  // Node.js backend deployed on Railway
+  static const String baseUrl =
+    'https://productivity-hub-production-22ee.up.railway.app';
 
   static Future<dynamic> get(String endpoint) async {
     final response = await http.get(
