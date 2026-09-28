@@ -2,6 +2,8 @@ const express = require("express");
 const cors = require("cors");
 const { MongoClient, ObjectId } = require("mongodb");
 const dotenv = require("dotenv");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
 dotenv.config();
 
@@ -12,21 +14,28 @@ app.use(cors());
 app.use(express.json());
 
 const MONGODB_URI = process.env.MONGODB_URI;
+const JWT_SECRET = process.env.JWT_SECRET;
 
 if (!MONGODB_URI) {
   console.error("ERROR: MONGODB_URI was not found in backend/.env");
   process.exit(1);
 }
 
+if (!JWT_SECRET) {
+  console.error("ERROR: JWT_SECRET was not found in backend/.env");
+  process.exit(1);
+}
+
 const client = new MongoClient(MONGODB_URI);
 
 let db;
+let usersCollection;
 let goalsCollection;
 let tasksCollection;
 
-// -------------------------
-// Helpers
-// -------------------------
+// =====================================================
+// HELPERS
+// =====================================================
 
 function validObjectId(id) {
   return ObjectId.isValid(id);
@@ -66,9 +75,46 @@ function isOverdue(dateString) {
   return date < new Date();
 }
 
-// -------------------------
-// Basic routes
-// -------------------------
+// =====================================================
+// AUTHENTICATION MIDDLEWARE
+// =====================================================
+
+function authenticateToken(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader) {
+      return res.status(401).json({
+        detail: "Authentication required."
+      });
+    }
+
+    if (!authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        detail: "Invalid authorization format."
+      });
+    }
+
+    const token = authHeader.substring(7);
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    req.user = {
+      userId: decoded.userId,
+      username: decoded.username
+    };
+
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      detail: "Invalid or expired token."
+    });
+  }
+}
+
+// =====================================================
+// BASIC ROUTES
+// =====================================================
 
 app.get("/", (req, res) => {
   res.json({
@@ -99,11 +145,195 @@ app.get("/database-test", async (req, res) => {
   }
 });
 
-// -------------------------
-// GOALS
-// -------------------------
+// =====================================================
+// REGISTER
+// =====================================================
 
-app.post("/goals", async (req, res) => {
+app.post("/auth/register", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({
+        detail: "Username and password are required."
+      });
+    }
+
+    const cleanUsername = username.toString().trim();
+
+    if (cleanUsername.length < 3) {
+      return res.status(400).json({
+        detail: "Username must contain at least 3 characters."
+      });
+    }
+
+    // Password must contain:
+    // 1 uppercase letter
+    // 1 number
+    // 1 special character
+    const passwordPattern =
+      /^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).+$/;
+
+    if (!passwordPattern.test(password.toString())) {
+      return res.status(400).json({
+        detail:
+          "Password must contain at least one uppercase letter, one number, and one special character."
+      });
+    }
+
+    const normalizedUsername = cleanUsername.toLowerCase();
+
+    const existingUser = await usersCollection.findOne({
+      username_normalized: normalizedUsername
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        detail: "Username already exists."
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password.toString(), 12);
+
+    const newUser = {
+      username: cleanUsername,
+      username_normalized: normalizedUsername,
+      password: hashedPassword,
+      created_at: new Date()
+    };
+
+    const result = await usersCollection.insertOne(newUser);
+
+    const token = jwt.sign(
+      {
+        userId: result.insertedId.toString(),
+        username: cleanUsername
+      },
+      JWT_SECRET,
+      {
+        expiresIn: "7d"
+      }
+    );
+
+    res.status(201).json({
+      message: "Registration successful.",
+      token: token,
+      username: cleanUsername
+    });
+  } catch (error) {
+    // Handles MongoDB unique-index race condition.
+    if (error.code === 11000) {
+      return res.status(409).json({
+        detail: "Username already exists."
+      });
+    }
+
+    console.error("POST /auth/register error:", error);
+
+    res.status(500).json({
+      detail: "Failed to register user."
+    });
+  }
+});
+
+// =====================================================
+// LOGIN
+// =====================================================
+
+app.post("/auth/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({
+        detail: "Username and password are required."
+      });
+    }
+
+    const normalizedUsername =
+      username.toString().trim().toLowerCase();
+
+    const user = await usersCollection.findOne({
+      username_normalized: normalizedUsername
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        detail: "Invalid username or password."
+      });
+    }
+
+    const passwordMatches = await bcrypt.compare(
+      password.toString(),
+      user.password
+    );
+
+    if (!passwordMatches) {
+      return res.status(401).json({
+        detail: "Invalid username or password."
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        userId: user._id.toString(),
+        username: user.username
+      },
+      JWT_SECRET,
+      {
+        expiresIn: "7d"
+      }
+    );
+
+    res.json({
+      message: "Login successful.",
+      token: token,
+      username: user.username
+    });
+  } catch (error) {
+    console.error("POST /auth/login error:", error);
+
+    res.status(500).json({
+      detail: "Failed to login."
+    });
+  }
+});
+
+// =====================================================
+// CURRENT USER
+// =====================================================
+
+app.get("/auth/me", authenticateToken, async (req, res) => {
+  try {
+    const user = await usersCollection.findOne({
+      _id: new ObjectId(req.user.userId)
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        detail: "User not found."
+      });
+    }
+
+    res.json({
+      id: user._id.toString(),
+      username: user.username
+    });
+  } catch (error) {
+    console.error("GET /auth/me error:", error);
+
+    res.status(500).json({
+      detail: "Failed to fetch user."
+    });
+  }
+});
+
+// =====================================================
+// GOALS
+// =====================================================
+
+// CREATE GOAL
+app.post("/goals", authenticateToken, async (req, res) => {
   try {
     const {
       title,
@@ -118,6 +348,7 @@ app.post("/goals", async (req, res) => {
     }
 
     const newGoal = {
+      user_id: req.user.userId,
       title: title.toString().trim(),
       description: description.toString().trim(),
       deadline: deadline.toString(),
@@ -141,10 +372,13 @@ app.post("/goals", async (req, res) => {
   }
 });
 
-app.get("/goals", async (req, res) => {
+// GET ALL USER GOALS
+app.get("/goals", authenticateToken, async (req, res) => {
   try {
     const goals = await goalsCollection
-      .find({})
+      .find({
+        user_id: req.user.userId
+      })
       .sort({ created_at: -1 })
       .toArray();
 
@@ -158,7 +392,8 @@ app.get("/goals", async (req, res) => {
   }
 });
 
-app.get("/goals/:id", async (req, res) => {
+// GET ONE USER GOAL
+app.get("/goals/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -169,7 +404,8 @@ app.get("/goals/:id", async (req, res) => {
     }
 
     const goal = await goalsCollection.findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      user_id: req.user.userId
     });
 
     if (!goal) {
@@ -188,7 +424,8 @@ app.get("/goals/:id", async (req, res) => {
   }
 });
 
-app.put("/goals/:id", async (req, res) => {
+// UPDATE USER GOAL
+app.put("/goals/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -211,7 +448,10 @@ app.put("/goals/:id", async (req, res) => {
     }
 
     const result = await goalsCollection.updateOne(
-      { _id: new ObjectId(id) },
+      {
+        _id: new ObjectId(id),
+        user_id: req.user.userId
+      },
       {
         $set: {
           title: title.toString().trim(),
@@ -228,7 +468,8 @@ app.put("/goals/:id", async (req, res) => {
     }
 
     const updatedGoal = await goalsCollection.findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      user_id: req.user.userId
     });
 
     res.json(serializeGoal(updatedGoal));
@@ -241,7 +482,8 @@ app.put("/goals/:id", async (req, res) => {
   }
 });
 
-app.delete("/goals/:id", async (req, res) => {
+// DELETE USER GOAL
+app.delete("/goals/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -254,7 +496,8 @@ app.delete("/goals/:id", async (req, res) => {
     const objectId = new ObjectId(id);
 
     const result = await goalsCollection.deleteOne({
-      _id: objectId
+      _id: objectId,
+      user_id: req.user.userId
     });
 
     if (result.deletedCount === 0) {
@@ -263,9 +506,10 @@ app.delete("/goals/:id", async (req, res) => {
       });
     }
 
-    // Delete tasks belonging to this goal.
+    // Delete tasks belonging to this user's goal.
     await tasksCollection.deleteMany({
-      goal_id: id
+      goal_id: id,
+      user_id: req.user.userId
     });
 
     res.json({
@@ -280,11 +524,12 @@ app.delete("/goals/:id", async (req, res) => {
   }
 });
 
-// -------------------------
+// =====================================================
 // TASKS
-// -------------------------
+// =====================================================
 
-app.post("/tasks", async (req, res) => {
+// CREATE TASK
+app.post("/tasks", authenticateToken, async (req, res) => {
   try {
     const {
       title,
@@ -305,8 +550,11 @@ app.post("/tasks", async (req, res) => {
       });
     }
 
+    // IMPORTANT:
+    // The goal must belong to the logged-in user.
     const goalExists = await goalsCollection.findOne({
-      _id: new ObjectId(goal_id)
+      _id: new ObjectId(goal_id),
+      user_id: req.user.userId
     });
 
     if (!goalExists) {
@@ -316,6 +564,7 @@ app.post("/tasks", async (req, res) => {
     }
 
     const newTask = {
+      user_id: req.user.userId,
       title: title.toString().trim(),
       goal_id: goal_id.toString(),
       deadline: deadline.toString(),
@@ -341,10 +590,13 @@ app.post("/tasks", async (req, res) => {
   }
 });
 
-app.get("/tasks", async (req, res) => {
+// GET ALL USER TASKS
+app.get("/tasks", authenticateToken, async (req, res) => {
   try {
     const tasks = await tasksCollection
-      .find({})
+      .find({
+        user_id: req.user.userId
+      })
       .sort({ created_at: -1 })
       .toArray();
 
@@ -358,7 +610,8 @@ app.get("/tasks", async (req, res) => {
   }
 });
 
-app.get("/tasks/:id", async (req, res) => {
+// GET ONE USER TASK
+app.get("/tasks/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -369,7 +622,8 @@ app.get("/tasks/:id", async (req, res) => {
     }
 
     const task = await tasksCollection.findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      user_id: req.user.userId
     });
 
     if (!task) {
@@ -388,7 +642,8 @@ app.get("/tasks/:id", async (req, res) => {
   }
 });
 
-app.put("/tasks/:id", async (req, res) => {
+// UPDATE USER TASK
+app.put("/tasks/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -418,8 +673,10 @@ app.put("/tasks/:id", async (req, res) => {
       });
     }
 
+    // Make sure the goal belongs to the logged-in user.
     const goalExists = await goalsCollection.findOne({
-      _id: new ObjectId(goal_id)
+      _id: new ObjectId(goal_id),
+      user_id: req.user.userId
     });
 
     if (!goalExists) {
@@ -429,7 +686,10 @@ app.put("/tasks/:id", async (req, res) => {
     }
 
     const result = await tasksCollection.updateOne(
-      { _id: new ObjectId(id) },
+      {
+        _id: new ObjectId(id),
+        user_id: req.user.userId
+      },
       {
         $set: {
           title: title.toString().trim(),
@@ -448,7 +708,8 @@ app.put("/tasks/:id", async (req, res) => {
     }
 
     const updatedTask = await tasksCollection.findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      user_id: req.user.userId
     });
 
     res.json(serializeTask(updatedTask));
@@ -461,52 +722,66 @@ app.put("/tasks/:id", async (req, res) => {
   }
 });
 
-app.patch("/tasks/:id/complete", async (req, res) => {
-  try {
-    const { id } = req.params;
+// COMPLETE / UNCOMPLETE TASK
+app.patch(
+  "/tasks/:id/complete",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
 
-    if (!validObjectId(id)) {
-      return res.status(400).json({
-        detail: "Invalid task ID."
-      });
-    }
-
-    const task = await tasksCollection.findOne({
-      _id: new ObjectId(id)
-    });
-
-    if (!task) {
-      return res.status(404).json({
-        detail: "Task not found."
-      });
-    }
-
-    const newCompletedStatus = !task.completed;
-
-    await tasksCollection.updateOne(
-      { _id: new ObjectId(id) },
-      {
-        $set: {
-          completed: newCompletedStatus
-        }
+      if (!validObjectId(id)) {
+        return res.status(400).json({
+          detail: "Invalid task ID."
+        });
       }
-    );
 
-    const updatedTask = await tasksCollection.findOne({
-      _id: new ObjectId(id)
-    });
+      const task = await tasksCollection.findOne({
+        _id: new ObjectId(id),
+        user_id: req.user.userId
+      });
 
-    res.json(serializeTask(updatedTask));
-  } catch (error) {
-    console.error("PATCH /tasks/:id/complete error:", error);
+      if (!task) {
+        return res.status(404).json({
+          detail: "Task not found."
+        });
+      }
 
-    res.status(500).json({
-      detail: "Failed to update task status."
-    });
+      const newCompletedStatus = !task.completed;
+
+      await tasksCollection.updateOne(
+        {
+          _id: new ObjectId(id),
+          user_id: req.user.userId
+        },
+        {
+          $set: {
+            completed: newCompletedStatus
+          }
+        }
+      );
+
+      const updatedTask = await tasksCollection.findOne({
+        _id: new ObjectId(id),
+        user_id: req.user.userId
+      });
+
+      res.json(serializeTask(updatedTask));
+    } catch (error) {
+      console.error(
+        "PATCH /tasks/:id/complete error:",
+        error
+      );
+
+      res.status(500).json({
+        detail: "Failed to update task status."
+      });
+    }
   }
-});
+);
 
-app.delete("/tasks/:id", async (req, res) => {
+// DELETE USER TASK
+app.delete("/tasks/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -517,7 +792,8 @@ app.delete("/tasks/:id", async (req, res) => {
     }
 
     const result = await tasksCollection.deleteOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      user_id: req.user.userId
     });
 
     if (result.deletedCount === 0) {
@@ -538,14 +814,23 @@ app.delete("/tasks/:id", async (req, res) => {
   }
 });
 
-// -------------------------
+// =====================================================
 // STATISTICS
-// -------------------------
+// =====================================================
 
-app.get("/stats", async (req, res) => {
+app.get("/stats", authenticateToken, async (req, res) => {
   try {
-    const goals = await goalsCollection.find({}).toArray();
-    const tasks = await tasksCollection.find({}).toArray();
+    const goals = await goalsCollection
+      .find({
+        user_id: req.user.userId
+      })
+      .toArray();
+
+    const tasks = await tasksCollection
+      .find({
+        user_id: req.user.userId
+      })
+      .toArray();
 
     const totalGoals = goals.length;
     const totalTasks = tasks.length;
@@ -561,13 +846,17 @@ app.get("/stats", async (req, res) => {
     ).length;
 
     const overdueTasks = tasks.filter(
-      (task) => !task.completed && isOverdue(task.deadline)
+      (task) =>
+        !task.completed &&
+        isOverdue(task.deadline)
     ).length;
 
     const completionRate =
       totalTasks === 0
         ? 0
-        : Math.round((completedTasks / totalTasks) * 100);
+        : Math.round(
+            (completedTasks / totalTasks) * 100
+          );
 
     res.json({
       total_goals: totalGoals,
@@ -587,9 +876,9 @@ app.get("/stats", async (req, res) => {
   }
 });
 
-// -------------------------
-// Start server
-// -------------------------
+// =====================================================
+// START SERVER
+// =====================================================
 
 async function startServer() {
   try {
@@ -597,8 +886,15 @@ async function startServer() {
 
     db = client.db("productivity_db");
 
+    usersCollection = db.collection("users");
     goalsCollection = db.collection("goals");
     tasksCollection = db.collection("tasks");
+
+    // Prevent duplicate usernames.
+    await usersCollection.createIndex(
+      { username_normalized: 1 },
+      { unique: true }
+    );
 
     await db.command({ ping: 1 });
 
